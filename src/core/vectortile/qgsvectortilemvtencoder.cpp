@@ -365,7 +365,7 @@ void QgsVectorTileMVTEncoder::addFeature( vector_tile::Tile_Layer *tileLayer, co
 
     case Qgis::WkbType::LineString:
     {
-      const QgsLineString *ls = qgsgeometry_cast<const QgsLineString *>( geom )
+      const QgsLineString *ls = qgsgeometry_cast<const QgsLineString *>( geom );
       if (!(encodeLineString( ls, true, false, geomWriter )))
         encodePlaceholderLineString( ls, geomWriter );
     }
