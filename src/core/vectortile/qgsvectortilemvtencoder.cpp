@@ -82,8 +82,8 @@ struct MVTGeometryWriter
   }
 };
 
-
-static void encodeLineString( const QgsLineString *lineString, bool isRing, bool reversed, MVTGeometryWriter &geomWriter )
+// Returns the number of points added after simplification (0 implies feature simplified away)
+static int encodeLineString( const QgsLineString *lineString, bool isRing, bool reversed, MVTGeometryWriter &geomWriter )
 {
   int count = lineString->numPoints();
   const double *xData = lineString->xData();
@@ -106,8 +106,8 @@ static void encodeLineString( const QgsLineString *lineString, bool isRing, bool
     last = pt;
   }
   count = tilePoints.count();
-  if ( count == 0 )
-    return;
+  if ( count <= 1 )
+    return 0;
 
   geomWriter.addMoveTo( 1 );
   geomWriter.addPoint( tilePoints[0] );
@@ -122,8 +122,36 @@ static void encodeLineString( const QgsLineString *lineString, bool isRing, bool
     for ( int i = 1; i < count; ++i )
       geomWriter.addPoint( tilePoints[i] );
   }
+  return count;
 }
 
+static void encodePlaceholderMLString( const QgsMultiLineString *mlString, MVTGeometryWriter &geomWriter )
+{
+  const double *xData = mlString->lineStringN(0)->xData();
+  const double *yData = mlString->lineStringN(0)->yData();
+  const QPoint ref = geomWriter.mapToTileCoordinates( xData[0], yData[0] );
+  const QPoint added( static_cast<int>(ref.x()), static_cast<int>(ref.y() + ((qint32) 1)) );
+
+  geomWriter.addMoveTo( 1 );
+  geomWriter.addPoint( ref );
+  geomWriter.addLineTo( 1 );
+  geomWriter.addPoint( added );
+}
+
+static void encodePlaceholderLineString( const QgsLineString *lineString, MVTGeometryWriter &geomWriter )
+{
+  const double *xData = lineString->xData();
+  const double *yData = lineString->yData();
+  const QPoint ref = geomWriter.mapToTileCoordinates( xData[0], yData[0] );
+  const QPoint added( static_cast<int>(ref.x()), static_cast<int>(ref.y() + ((qint32) 1)) );
+
+  geomWriter.addMoveTo( 1 );
+  geomWriter.addPoint( ref );
+  geomWriter.addLineTo( 1 );
+  geomWriter.addPoint( added );
+}
+
+// TODO: This is missing handling of unwritten geometry
 static void encodePolygon( const QgsPolygon *polygon, MVTGeometryWriter &geomWriter )
 {
   const QgsLineString *exteriorRing = qgsgeometry_cast<const QgsLineString *>( polygon->exteriorRing() );
@@ -259,6 +287,10 @@ void QgsVectorTileMVTEncoder::addFeature( vector_tile::Tile_Layer *tileLayer, co
     if ( g.area() < onePixel * onePixel )
       return; // too small
   }
+  else if ( geomType != Qgis::GeometryType::Point )
+  {
+    return; // This would become an unknown type
+  }
 
   vector_tile::Tile_Feature *feature = tileLayer->add_features();
 
@@ -333,7 +365,8 @@ void QgsVectorTileMVTEncoder::addFeature( vector_tile::Tile_Layer *tileLayer, co
 
     case Qgis::WkbType::LineString:
     {
-      encodeLineString( qgsgeometry_cast<const QgsLineString *>( geom ), true, false, geomWriter );
+      if (!(encodeLineString( qgsgeometry_cast<const QgsLineString *>( geom ), true, false, geomWriter )))
+        encodePlaceholderLineString(mls, geomWriter);
     }
     break;
 
@@ -355,9 +388,18 @@ void QgsVectorTileMVTEncoder::addFeature( vector_tile::Tile_Layer *tileLayer, co
     case Qgis::WkbType::MultiLineString:
     {
       const QgsMultiLineString *mls = qgsgeometry_cast<const QgsMultiLineString *>( geom );
+      bool geomAdded = false;
       for ( int i = 0; i < mls->numGeometries(); ++i )
       {
-        encodeLineString( mls->lineStringN( i ), true, false, geomWriter );
+        if (encodeLineString( mls->lineStringN( i ), true, false, geomWriter ))
+        {
+          geomAdded = true;
+        }
+      }
+      if (!geomAdded) {
+        // We've added tags and other info, but have no geometry to add.
+        // In one model, we'd remove this feature, but for the moment we'll just add placeholder geometry
+        encodePlaceholderMLString(mls, geomWriter);
       }
     }
     break;
